@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>TikTok Gift Climber – Mountain Run</title>
+  <title>TikTok Gift Climber – HD Mountain Run</title>
   <style>
     * { box-sizing: border-box; }
+
     body {
       margin: 0;
       overflow: hidden;
@@ -12,47 +13,67 @@
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: #fff;
     }
+
     #hud {
       position: absolute;
-      top: 10px;
-      left: 50%;
-      transform: translateX(-50%);
+      top: 0;
+      left: 0;
+      right: 0;
       display: flex;
       flex-direction: column;
-      gap: 5px;
+      gap: 8px;
       align-items: center;
-      z-index: 10;
+      padding-top: 6px;
+      z-index: 20;
       pointer-events: none;
     }
+
     #rules, #status, #eventMsg {
-      padding: 6px 14px;
+      max-width: 100%;
+      padding: 10px 24px;
       border-radius: 999px;
-      background: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      font-size: 13px;
+      background: rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      font-size: clamp(14px, 2.2vw, 18px);
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
+
     #rules {
-      font-size: 12px;
-      opacity: 0.96;
+      font-weight: 600;
     }
+
     #eventMsg {
-      background: rgba(255, 90, 90, 0.82);
+      background: linear-gradient(90deg, rgba(255,90,90,0.9), rgba(255,160,80,0.9));
       display: none;
     }
+
     canvas { display: block; }
+
+    /* subtle vignette to make it look more cinematic */
+    #vignette {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.65) 100%);
+      z-index: 5;
+      mix-blend-mode: multiply;
+    }
   </style>
 </head>
 <body>
 <div id="hud">
   <div id="rules">
-    🌹 Every Rose = +1 climber · ⏱ Game lasts 30 min · 🏁 First to cross the finish wins · 💸 Money Gun = restart
+    🌹 Every Rose = +1 climber · ⏱ 30-min climb · 🏁 First to cross the finish wins · 💸 Money Gun = restart
   </div>
   <div id="status"></div>
   <div id="eventMsg"></div>
 </div>
 <canvas id="game"></canvas>
+<div id="vignette"></div>
 
 <script>
 // =====================================================
@@ -77,7 +98,9 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
+// -----------------------------------------------------
 // 3D vector helpers
+// -----------------------------------------------------
 function vec3(x=0,y=0,z=0){ return {x,y,z}; }
 function add(a,b){ return vec3(a.x+b.x,a.y+b.y,a.z+b.z); }
 function sub(a,b){ return vec3(a.x-b.x,a.y-b.y,a.z-b.z); }
@@ -94,13 +117,14 @@ function norm(v){
   return mul(v,1/len);
 }
 
-// camera
+// -----------------------------------------------------
+// Camera (over-the-shoulder)
+// -----------------------------------------------------
 const FOV = 60 * Math.PI / 180;
 const TAN_FOV = Math.tan(FOV/2);
 let cameraPos = vec3(0,40,-80);
 let cameraTarget = vec3(0,40,0);
 
-// project world point to screen
 function project(point){
   const forward = norm(sub(cameraTarget,cameraPos));
   const right = norm(cross(forward, vec3(0,1,0)));
@@ -111,7 +135,7 @@ function project(point){
   const yCam = dot(v,up);
   const zCam = dot(v,forward);
 
-  if (zCam <= 0.1) return null; // behind camera
+  if (zCam <= 0.1) return null;
 
   const aspect = width / height;
   const xNorm = (xCam / (zCam * TAN_FOV)) / aspect;
@@ -133,19 +157,19 @@ let shakeIntensity = 0;
 const MOUNTAIN_HEIGHT = 800;    // world units
 const BASE_RADIUS = 260;
 const TOP_RADIUS = 80;
-const PATH_TURNS = 6;           // spiral turns
-const PATH_WIDTH = 32;          // world units
+const PATH_TURNS = 6;
+const PATH_WIDTH = 32;
 
 function pathPoint(t){
   const y = t * MOUNTAIN_HEIGHT;
   const radius = BASE_RADIUS + (TOP_RADIUS - BASE_RADIUS) * t;
   const theta = t * PATH_TURNS * Math.PI * 2;
-  const x = Math.cos(theta) * radius;
+  const sway = Math.sin(t * 10) * 8; // subtle uneven path
+  const x = Math.cos(theta) * radius + sway;
   const z = Math.sin(theta) * radius;
   return vec3(x,y,z);
 }
 
-// Create path segment quad
 function pathSegmentQuad(t0, t1){
   const p0 = pathPoint(t0);
   const p1 = pathPoint(t1);
@@ -156,10 +180,10 @@ function pathSegmentQuad(t0, t1){
   const offset = mul(side, halfW);
 
   return [
-    add(p0, offset),  // left0
-    sub(p0, offset),  // right0
-    sub(p1, offset),  // right1
-    add(p1, offset)   // left1
+    add(p0, offset),
+    sub(p0, offset),
+    sub(p1, offset),
+    add(p1, offset)
   ];
 }
 
@@ -167,36 +191,39 @@ function pathSegmentQuad(t0, t1){
 function envColors(t){
   if (t < 0.33){
     return {
-      skyTop:   "#76d2ff",
-      skyBottom:"#234f6a",
-      fog:      "rgba(150,210,255,0.25)",
-      path:     "#4f8241",
-      side:     "#243e25",
-      ground:   "#3f5d32",
-      mountain1:"#334453",
-      mountain2:"#293543"
+      skyTop:   "#7fd5ff",
+      skyBottom:"#255a74",
+      fog:      "rgba(160,220,255,0.28)",
+      path:     "#5f9151",
+      side:     "#274525",
+      ground:   "#405f34",
+      mountainNear:"#243546",
+      mountainFar:"#132130",
+      snow:"#eaf5ff"
     };
   } else if (t < 0.66){
     return {
-      skyTop:   "#5a7caf",
+      skyTop:   "#6684b3",
       skyBottom:"#172236",
-      fog:      "rgba(160,175,210,0.28)",
-      path:     "#806d57",
-      side:     "#463528",
-      ground:   "#5b4a3a",
-      mountain1:"#3d404b",
-      mountain2:"#2b2c34"
+      fog:      "rgba(170,185,220,0.3)",
+      path:     "#837058",
+      side:     "#4a3828",
+      ground:   "#5d4a3a",
+      mountainNear:"#353743",
+      mountainFar:"#20212b",
+      snow:"#e0e8f7"
     };
   } else {
     return {
-      skyTop:   "#f1f7ff",
-      skyBottom:"#4a6ea4",
-      fog:      "rgba(255,255,255,0.45)",
-      path:     "#f6f6fb",
-      side:     "#9aa7c4",
-      ground:   "#d6dde9",
-      mountain1:"#b4c3d8",
-      mountain2:"#8ea0bb"
+      skyTop:   "#f2f7ff",
+      skyBottom:"#47659c",
+      fog:      "rgba(255,255,255,0.5)",
+      path:     "#f8f8fc",
+      side:     "#a8b5cf",
+      ground:   "#dde4f1",
+      mountainNear:"#b8c6da",
+      mountainFar:"#9aacc7",
+      snow:"#ffffff"
     };
   }
 }
@@ -205,12 +232,12 @@ function envColors(t){
 // CLIMBERS & GAME LOGIC
 // =====================================================
 const climbers = [];
-const BASE_SPEED = 1 / (30 * 60); // 30 minutes from 0 -> 1
+const BASE_SPEED = 1 / (30 * 60); // 30-minute climb
 let gameTime = 0;
-let nextHazardAt = 60; // first test at 1 minute
+let nextHazardAt = 60;
 let hazard = {
   active:false,
-  type:null,    // 'fire','blizzard','rockfall'
+  type:null,
   startT:0,
   endT:0,
   timer:0,
@@ -221,29 +248,30 @@ let gameOver = false;
 function addClimber(spawnAtMain = false){
   let t;
   if (spawnAtMain && climbers.length > 0){
-    const main = climbers[0];
-    t = Math.max(0, main.t - 0.003); // just behind
+    // EXACTLY where the main climber is
+    t = climbers[0].t;
   } else {
     t = 0;
   }
 
-  const sideOffset = (Math.random()*2 - 1) * (PATH_WIDTH*0.18);
+  // small sideways offset so you can see the crowd
+  const sideOffset = (Math.random()*2 - 1) * (PATH_WIDTH*0.20);
 
   climbers.push({
     t,
     speed: BASE_SPEED * (0.9 + Math.random()*0.3),
     sideOffset,
-    color: `hsl(${200 + Math.random()*80},80%,60%)`,
+    color: `hsl(${190 + Math.random()*100},84%,64%)`,
     bobOffset: Math.random()*Math.PI*2
   });
 }
 
-// one solo climber at base
+// start with one climber
 addClimber(false);
 
 window.addEventListener("keydown",(e)=>{
   if (e.key === "g" || e.key === "G"){
-    addClimber(true); // spawn right behind main climber
+    addClimber(true);
   }
 });
 
@@ -254,44 +282,44 @@ const hazardTypes = ["fire","blizzard","rockfall"];
 
 function spawnParticles(type){
   hazard.particles = [];
-  const count = type === "rockfall" ? 80 : 160;
+  const count = type === "rockfall" ? 80 : 190;
 
   for (let i=0;i<count;i++){
     if (type === "fire"){
       hazard.particles.push({
         x: width*0.5 + (Math.random()-0.5)*width*0.5,
         y: height*0.7 + Math.random()*height*0.25,
-        vx: (Math.random()-0.5)*20,
-        vy: -30 - Math.random()*40,
-        life: 0.6 + Math.random()*0.9,
-        maxLife: 0.6 + Math.random()*0.9,
-        size: 6 + Math.random()*10,
-        color1: "rgba(255,220,120,1)",
+        vx: (Math.random()-0.5)*30,
+        vy: -40 - Math.random()*45,
+        life: 0.7 + Math.random()*0.9,
+        maxLife: 0.7 + Math.random()*0.9,
+        size: 8 + Math.random()*14,
+        color1: "rgba(255,230,150,1)",
         color2: "rgba(255,90,40,0)"
       });
     } else if (type === "blizzard"){
       hazard.particles.push({
         x: Math.random()*width,
         y: Math.random()*height,
-        vx: -50 - Math.random()*80,
-        vy: 10 + Math.random()*30,
-        life: 1 + Math.random()*1.5,
-        maxLife: 1 + Math.random()*1.5,
-        size: 2 + Math.random()*4,
+        vx: -70 - Math.random()*90,
+        vy: 20 + Math.random()*40,
+        life: 1.2 + Math.random()*1.5,
+        maxLife: 1.2 + Math.random()*1.5,
+        size: 2 + Math.random()*5,
         color1: "rgba(255,255,255,1)",
         color2: "rgba(255,255,255,0)"
       });
     } else if (type === "rockfall"){
       hazard.particles.push({
         x: Math.random()*width,
-        y: -50 - Math.random()*150,
-        vx: (Math.random()-0.5)*40,
-        vy: 160 + Math.random()*120,
-        life: 1.2 + Math.random()*0.6,
-        maxLife: 1.2 + Math.random()*0.6,
-        size: 8 + Math.random()*14,
-        color1: "rgba(90,80,70,1)",
-        color2: "rgba(40,35,30,0)"
+        y: -80 - Math.random()*180,
+        vx: (Math.random()-0.5)*50,
+        vy: 190 + Math.random()*160,
+        life: 1.4 + Math.random()*0.6,
+        maxLife: 1.4 + Math.random()*0.6,
+        size: 10 + Math.random()*16,
+        color1: "rgba(105,92,80,1)",
+        color2: "rgba(45,38,32,0)"
       });
     }
   }
@@ -305,18 +333,18 @@ function triggerHazard(){
 
   hazard.active = true;
   hazard.type = hazardTypes[Math.floor(Math.random()*hazardTypes.length)];
-  hazard.timer = 4; // seconds visible
+  hazard.timer = 4;
   hazard.startT = Math.max(0, tCenter - 0.03);
   hazard.endT   = Math.min(1, tCenter + 0.03);
   spawnParticles(hazard.type);
 
-  // screen shake intensity
+  // screen shake
   if (hazard.type === "fire") shakeIntensity = 3;
   if (hazard.type === "blizzard") shakeIntensity = 2;
-  if (hazard.type === "rockfall") shakeIntensity = 6;
-  shakeTime = 0.6;
+  if (hazard.type === "rockfall") shakeIntensity = 7;
+  shakeTime = 0.7;
 
-  // Kill about 50% of non-main climbers
+  // knock out ~50% of non-main climbers
   const survivors = [main];
   for (let i=1;i<climbers.length;i++){
     if (Math.random() < 0.5) continue;
@@ -328,9 +356,9 @@ function triggerHazard(){
 
   // HUD message
   let msg = "";
-  if (hazard.type === "fire") msg = "🔥 Wildfire sweeps across the path – half the climbers are gone!";
-  if (hazard.type === "blizzard") msg = "❄️ Whiteout blizzard – only the toughest climbers push through!";
-  if (hazard.type === "rockfall") msg = "🪨 Rockfall! Boulders smash the trail and wipe out half the group!";
+  if (hazard.type === "fire") msg = "🔥 Wildfire tears through the trail – half the climbers are gone!";
+  if (hazard.type === "blizzard") msg = "❄️ Whiteout blizzard – only the toughest keep moving!";
+  if (hazard.type === "rockfall") msg = "🪨 Rockfall! Massive boulders smash the path and wipe out half the group!";
   eventEl.textContent = msg;
   eventEl.style.display = "block";
 }
@@ -348,26 +376,24 @@ function updateHazard(dt){
     nextHazardAt += 60;
   }
 
-  // update particles
-  const list = hazard.particles;
-  for (let i=list.length-1;i>=0;i--){
-    const p = list[i];
+  // particles
+  for (let i=hazard.particles.length-1;i>=0;i--){
+    const p = hazard.particles[i];
     p.life -= dt;
     if (p.life <= 0){
-      list.splice(i,1);
+      hazard.particles.splice(i,1);
       continue;
     }
     p.x += p.vx * dt;
     p.y += p.vy * dt;
 
-    // wrap snow horizontally
     if (hazard.type === "blizzard"){
-      if (p.x < -20) p.x = width + 20;
-      if (p.y > height+20) p.y = -20;
+      if (p.x < -30) p.x = width + 30;
+      if (p.y > height+30) p.y = -30;
     }
   }
 
-  // screen shake decay
+  // shake decay
   if (shakeTime > 0){
     shakeTime -= dt;
     if (shakeTime <= 0) shakeIntensity = 0;
@@ -375,31 +401,31 @@ function updateHazard(dt){
 }
 
 // =====================================================
-// DRAWING: BACKGROUND MOUNTAINS & PATH
+// BACKGROUND MOUNTAINS & GROUND
 // =====================================================
-function drawBackground(avgT){
+function drawMountains(avgT){
   const env = envColors(avgT);
 
-  // sky gradient
+  // sky
   const g = ctx.createLinearGradient(0,0,0,height);
   g.addColorStop(0, env.skyTop);
   g.addColorStop(1, env.skyBottom);
   ctx.fillStyle = g;
   ctx.fillRect(0,0,width,height);
 
-  // distant haze
+  // haze strip
   ctx.fillStyle = env.fog;
-  ctx.fillRect(0,height*0.52,width,height*0.48);
+  ctx.fillRect(0,height*0.55,width,height*0.45);
 
-  // distant mountain ridges
-  function drawRidge(y, amp, segments, color, alpha){
+  // big mountain silhouettes (screen-space)
+  function ridge(y, amp, segments, color, alpha, snow){
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(0,height);
     for(let i=0;i<=segments;i++){
       const t = i/segments;
       const x = t*width;
-      const noise = Math.sin(t*5)*0.4 + Math.sin(t*13+1)*0.25;
+      const noise = Math.sin(t*4)*0.6 + Math.sin(t*13+2)*0.4;
       const yy = y + noise*amp;
       ctx.lineTo(x,yy);
     }
@@ -408,18 +434,38 @@ function drawBackground(avgT){
     ctx.fillStyle = color;
     ctx.globalAlpha = alpha;
     ctx.fill();
+
+    // snow highlights on top ridge
+    if (snow){
+      ctx.globalAlpha = alpha*0.8;
+      ctx.beginPath();
+      for(let i=0;i<=segments;i++){
+        const t = i/segments;
+        const x = t*width;
+        const noise = Math.sin(t*4)*0.6 + Math.sin(t*13+2)*0.4;
+        const yy = y + noise*amp - 10;
+        if (i===0) ctx.moveTo(x,yy);
+        else ctx.lineTo(x,yy);
+      }
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = env.snow;
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
-  drawRidge(height*0.65, 40, 30, env.mountain2, 0.9);
-  drawRidge(height*0.72, 55, 40, env.mountain1, 1.0);
+  ridge(height*0.70, 55, 32, env.mountainFar, 0.9, false);
+  ridge(height*0.76, 70, 40, env.mountainNear, 1.0, true);
 }
 
+// =====================================================
+// PATH & LOCAL DETAIL
+// =====================================================
 function drawPath(mainT){
   const env = envColors(mainT);
   const segments = 80;
   const spanBefore = 0.03;
-  const spanAfter  = 0.15; // less visible ahead -> more suspense
+  const spanAfter  = 0.16; // limited view ahead
   const tStart = Math.max(0, mainT - spanBefore);
   const tEnd   = Math.min(1, mainT + spanAfter);
   const dt = (tEnd - tStart) / segments;
@@ -432,7 +478,7 @@ function drawPath(mainT){
     if (proj.some(p=>p===null)) continue;
 
     const avgZ = proj.reduce((a,p)=>a+p.z,0)/proj.length;
-    let shade = 1 - Math.min(avgZ/450, 0.75);
+    let shade = 1 - Math.min(avgZ/450, 0.8);
 
     function shadeColor(hex, factor){
       const c = parseInt(hex.slice(1),16);
@@ -441,7 +487,7 @@ function drawPath(mainT){
       return `rgb(${r},${g},${b})`;
     }
 
-    // base ground under path
+    // ground under boardwalk
     ctx.beginPath();
     ctx.moveTo(proj[0].x, proj[0].y);
     for(let j=1;j<4;j++) ctx.lineTo(proj[j].x, proj[j].y);
@@ -449,33 +495,55 @@ function drawPath(mainT){
     ctx.fillStyle = shadeColor(env.ground, 0.45+shade*0.55);
     ctx.fill();
 
-    // inset path boardwalk
-    const inset = 0.24;
+    // inset boardwalk
+    const inset = 0.26;
     const insetProj = proj.map((p)=>{
-      const centerX = (proj[0].x+proj[1].x+proj[2].x+proj[3].x)/4;
-      const centerY = (proj[0].y+proj[1].y+proj[2].y+proj[3].y)/4;
+      const cx = (proj[0].x+proj[1].x+proj[2].x+proj[3].x)/4;
+      const cy = (proj[0].y+proj[1].y+proj[2].y+proj[3].y)/4;
       return {
-        x: centerX + (p.x-centerX)*(1-inset),
-        y: centerY + (p.y-centerY)*(1-inset)
+        x: cx + (p.x-cx)*(1-inset),
+        y: cy + (p.y-cy)*(1-inset)
       };
     });
+
+    // hazard color overlay
+    const inHazard = hazard.active && !(t1 < hazard.startT || t0 > hazard.endT);
     ctx.beginPath();
     ctx.moveTo(insetProj[0].x, insetProj[0].y);
     for(let j=1;j<4;j++) ctx.lineTo(insetProj[j].x, insetProj[j].y);
     ctx.closePath();
 
-    const inHazard = hazard.active && !(t1 < hazard.startT || t0 > hazard.endT);
     if (inHazard){
-      let col = "rgba(255,120,60,0.9)";
-      if (hazard.type==="blizzard") col = "rgba(230,245,255,0.96)";
-      if (hazard.type==="rockfall") col = "rgba(150,130,100,0.95)";
+      let col = "rgba(255,140,70,0.95)";
+      if (hazard.type==="blizzard") col = "rgba(230,245,255,0.98)";
+      if (hazard.type==="rockfall") col = "rgba(155,130,100,0.98)";
       ctx.fillStyle = col;
     } else {
-      ctx.fillStyle = shadeColor(env.path, 0.55+shade*0.45);
+      ctx.fillStyle = shadeColor(env.path, 0.6+shade*0.4);
     }
     ctx.fill();
 
-    // edge
+    // plank lines for higher detail
+    const plankCount = 5;
+    ctx.strokeStyle = shadeColor("#2c2c2c", 0.6+shade*0.4);
+    ctx.lineWidth = 1;
+    for (let k=1;k<plankCount;k++){
+      const s = k/plankCount;
+      const a = {
+        x: insetProj[0].x + (insetProj[3].x-insetProj[0].x)*s,
+        y: insetProj[0].y + (insetProj[3].y-insetProj[0].y)*s
+      };
+      const b = {
+        x: insetProj[1].x + (insetProj[2].x-insetProj[1].x)*s,
+        y: insetProj[1].y + (insetProj[2].y-insetProj[1].y)*s
+      };
+      ctx.beginPath();
+      ctx.moveTo(a.x,a.y);
+      ctx.lineTo(b.x,b.y);
+      ctx.stroke();
+    }
+
+    // side edge
     ctx.beginPath();
     ctx.moveTo(insetProj[1].x, insetProj[1].y);
     ctx.lineTo(insetProj[2].x, insetProj[2].y);
@@ -485,33 +553,29 @@ function drawPath(mainT){
   }
 }
 
-// hazard particles overlay (screen-space)
+// hazard particles
 function drawHazardParticles(){
   const list = hazard.particles;
   for (const p of list){
     const lifeFrac = p.life / p.maxLife;
     const r = p.size * (0.3 + 0.7*lifeFrac);
-    const grad = ctx.createRadialGradient(
-      p.x, p.y, 0,
-      p.x, p.y, r
-    );
+    const grad = ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,r);
     grad.addColorStop(0, p.color1);
     grad.addColorStop(1, p.color2);
     ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+    ctx.arc(p.x,p.y,r,0,Math.PI*2);
     ctx.fill();
   }
 
-  // extra full-screen snow wash for blizzard
   if (hazard.active && hazard.type === "blizzard"){
-    ctx.fillStyle = "rgba(255,255,255,0.14)";
+    ctx.fillStyle = "rgba(255,255,255,0.15)";
     ctx.fillRect(0,0,width,height);
   }
 }
 
 // =====================================================
-// CLIMBER DRAWING (3D-ish third-person)
+// CLIMBER DRAWING
 // =====================================================
 function drawClimber(one, time){
   const basePoint = pathPoint(one.t);
@@ -527,14 +591,14 @@ function drawClimber(one, time){
   const baseHeight = 70;
   const size = baseHeight * (1 / (p.z*0.04));
   const headR = size * 0.18;
-  const bodyH = size * 0.45;
-  const bodyW = size * 0.22;
-  const legL  = size * 0.35;
-  const armL  = size * 0.32;
-  const bob = Math.sin(time*4 + one.bobOffset)* (size*0.035);
+  const bodyH = size * 0.48;
+  const bodyW = size * 0.24;
+  const legL  = size * 0.36;
+  const armL  = size * 0.34;
+  const bob = Math.sin(time*4 + one.bobOffset)* (size*0.04);
 
   const cx = p.x;
-  const cy = p.y - size*0.3 + bob;
+  const cy = p.y - size*0.35 + bob;
 
   ctx.save();
 
@@ -542,74 +606,73 @@ function drawClimber(one, time){
   const groundPos = project(vec3(position.x,0,position.z));
   if (groundPos){
     ctx.beginPath();
-    ctx.ellipse(groundPos.x, groundPos.y, size*0.25, size*0.12, 0, 0, Math.PI*2);
+    ctx.ellipse(groundPos.x, groundPos.y, size*0.27, size*0.13, 0, 0, Math.PI*2);
     ctx.fillStyle = "rgba(0,0,0,0.35)";
     ctx.fill();
   }
 
   // legs
-  ctx.strokeStyle = "#222";
+  ctx.strokeStyle = "#111";
   ctx.lineWidth = size*0.055;
   ctx.lineCap = "round";
-  const walk = Math.sin(time*6 + one.bobOffset);
+  const walk = Math.sin(time*7 + one.bobOffset);
 
   ctx.beginPath();
-  ctx.moveTo(cx, cy + bodyH*0.4);
-  ctx.lineTo(cx - size*0.12 + walk*size*0.12,
-             cy + bodyH*0.4 + legL);
-  ctx.moveTo(cx, cy + bodyH*0.4);
-  ctx.lineTo(cx + size*0.12 - walk*size*0.12,
-             cy + bodyH*0.4 + legL);
+  ctx.moveTo(cx, cy + bodyH*0.45);
+  ctx.lineTo(cx - size*0.13 + walk*size*0.12,
+             cy + bodyH*0.45 + legL);
+  ctx.moveTo(cx, cy + bodyH*0.45);
+  ctx.lineTo(cx + size*0.13 - walk*size*0.12,
+             cy + bodyH*0.45 + legL);
   ctx.stroke();
 
-  // body
-  ctx.fillStyle = one.color;
-  ctx.fillRect(
-    cx - bodyW*0.5,
-    cy - bodyH*0.5,
-    bodyW,
-    bodyH
-  );
+  // body with gradient
+  const bodyTop = cy - bodyH*0.5;
+  const bodyGrad = ctx.createLinearGradient(cx,bodyTop,cx,bodyTop+bodyH);
+  bodyGrad.addColorStop(0, one.color);
+  bodyGrad.addColorStop(1, "rgba(0,0,0,0.4)");
+  ctx.fillStyle = bodyGrad;
+  ctx.fillRect(cx - bodyW*0.5, bodyTop, bodyW, bodyH);
 
   // backpack
-  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
   ctx.fillRect(
-    cx - bodyW*0.5 - size*0.07,
-    cy - bodyH*0.3,
-    size*0.14,
+    cx - bodyW*0.5 - size*0.08,
+    bodyTop + bodyH*0.15,
+    size*0.16,
     bodyH*0.7
   );
 
   // arms
   ctx.beginPath();
-  ctx.moveTo(cx, cy - bodyH*0.2);
+  ctx.moveTo(cx, bodyTop + bodyH*0.2);
   ctx.lineTo(
-    cx - size*0.18 - walk*size*0.18,
-    cy - bodyH*0.2 + armL
+    cx - size*0.20 - walk*size*0.18,
+    bodyTop + bodyH*0.2 + armL
   );
-  ctx.moveTo(cx, cy - bodyH*0.2);
+  ctx.moveTo(cx, bodyTop + bodyH*0.2);
   ctx.lineTo(
-    cx + size*0.18 + walk*size*0.18,
-    cy - bodyH*0.2 + armL
+    cx + size*0.20 + walk*size*0.18,
+    bodyTop + bodyH*0.2 + armL
   );
   ctx.stroke();
 
   // head
   ctx.beginPath();
-  ctx.arc(cx, cy - bodyH*0.65, headR, 0, Math.PI*2);
+  ctx.arc(cx, bodyTop - headR*0.7, headR, 0, Math.PI*2);
   ctx.fillStyle = "#ffd7b0";
   ctx.fill();
 
-  // highlight
+  // face highlight
   ctx.beginPath();
-  ctx.arc(cx+headR*0.25, cy - bodyH*0.65 - headR*0.1, headR*0.3, 0, Math.PI*2);
-  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.arc(cx+headR*0.28, bodyTop - headR*0.9, headR*0.35, 0, Math.PI*2);
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
   ctx.fill();
 
   ctx.restore();
 }
 
-// camera tightly above/behind main climber
+// camera locked just above/behind main climber
 function updateCamera(mainClimber){
   const t = mainClimber.t;
   const center = pathPoint(t);
@@ -618,10 +681,10 @@ function updateCamera(mainClimber){
   const up = vec3(0,1,0);
   const side = norm(cross(tangent, up));
 
-  const backDist = 32;  // closer now
-  const upDist = 26;
+  const backDist = 30;  // close
+  const upDist = 24;
 
-  cameraTarget = add(center, mul(up, 16)); // look just above head
+  cameraTarget = add(center, mul(up, 16));
   cameraPos = add(
     add(center, mul(tangent, -backDist)),
     mul(up, upDist)
@@ -643,7 +706,6 @@ function loop(now){
     gameTime += dt;
   }
 
-  // update climbers
   for (const c of climbers){
     if (!gameOver){
       c.t += c.speed * dt;
@@ -671,16 +733,15 @@ function loop(now){
 
   const avgT = Math.min(1, mainClimber.t + 0.1);
 
-  drawBackground(avgT);
+  drawMountains(avgT);
 
-  // apply screen shake for hazards
+  // shake
   ctx.save();
-  let sx = 0, sy = 0;
   if (shakeIntensity > 0){
-    sx = (Math.random()*2-1) * shakeIntensity;
-    sy = (Math.random()*2-1) * shakeIntensity;
+    const sx = (Math.random()*2-1) * shakeIntensity;
+    const sy = (Math.random()*2-1) * shakeIntensity;
+    ctx.translate(sx, sy);
   }
-  ctx.translate(sx, sy);
 
   drawPath(mainClimber.t);
 
@@ -695,11 +756,9 @@ function loop(now){
   }
 
   ctx.restore();
-
-  // particles & overlays drawn without shake
   drawHazardParticles();
 
-  // HUD status
+  // HUD status (big enough for TikTok viewers)
   const mins = Math.floor(gameTime / 60);
   const secs = Math.floor(gameTime % 60).toString().padStart(2,"0");
   const mainPct = Math.round(mainClimber.t * 100);
