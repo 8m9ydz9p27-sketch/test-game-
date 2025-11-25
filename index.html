@@ -2,17 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>TikTok Gift Climber (Canvas)</title>
+  <title>TikTok Gift Climber – 3D Style</title>
   <style>
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       overflow: hidden;
       background: #020308;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-        sans-serif;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: #fff;
     }
     #hint {
@@ -29,368 +26,407 @@
       -webkit-backdrop-filter: blur(10px);
       white-space: nowrap;
     }
-    canvas {
-      display: block;
-    }
+    canvas { display: block; }
   </style>
 </head>
 <body>
-<div id="hint">Press <b>G</b> to add a climber · Drag with mouse to pan · Scroll to zoom</div>
+<div id="hint">
+  Third-person 3D view · Press <b>G</b> to add a new climber
+</div>
 <canvas id="game"></canvas>
 
 <script>
-  // -------------------------------------------------------
-  // BASIC CANVAS SETUP (RETINA / HD)
-  // -------------------------------------------------------
-  const canvas = document.getElementById("game");
-  const ctx = canvas.getContext("2d");
-  let width = window.innerWidth;
-  let height = window.innerHeight;
-  let cameraY = 0;
-  let cameraZoom = 1;
+// =====================================================
+// BASIC CANVAS / CAMERA SETUP
+// =====================================================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
 
-  function resize() {
-    width = window.innerWidth;
-    height = window.innerHeight;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+let width = window.innerWidth;
+let height = window.innerHeight;
+
+function resize() {
+  width = window.innerWidth;
+  height = window.innerHeight;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resize);
+resize();
+
+// 3D vector helpers
+function vec3(x=0,y=0,z=0){ return {x,y,z}; }
+function add(a,b){ return vec3(a.x+b.x,a.y+b.y,a.z+b.z); }
+function sub(a,b){ return vec3(a.x-b.x,a.y-b.y,a.z-b.z); }
+function mul(a,s){ return vec3(a.x*s,a.y*s,a.z*s); }
+function dot(a,b){ return a.x*b.x+a.y*b.y+a.z*b.z; }
+function cross(a,b){ return vec3(
+  a.y*b.z-a.z*b.y,
+  a.z*b.x-a.x*b.z,
+  a.x*b.y-a.y*b.x
+); }
+function length(v){ return Math.sqrt(dot(v,v)); }
+function norm(v){
+  const len = length(v)||1;
+  return mul(v,1/len);
+}
+
+// camera
+const FOV = 60 * Math.PI / 180;
+const TAN_FOV = Math.tan(FOV/2);
+let cameraPos = vec3(0,40,-120);
+let cameraTarget = vec3(0,40,0);
+
+// project world point to screen
+function project(point){
+  const forward = norm(sub(cameraTarget,cameraPos));
+  const right = norm(cross(forward, vec3(0,1,0)));
+  const up = cross(right, forward);
+
+  const v = sub(point, cameraPos);
+  const xCam = dot(v,right);
+  const yCam = dot(v,up);
+  const zCam = dot(v,forward);
+
+  if (zCam <= 0.1) return null; // behind camera
+
+  const aspect = width / height;
+  const xNorm = (xCam / (zCam * TAN_FOV)) / aspect;
+  const yNorm = (yCam / (zCam * TAN_FOV));
+
+  const sx = (xNorm + 1) * 0.5 * width;
+  const sy = (1 - yNorm) * 0.5 * height;
+  const scale = 1 / zCam;
+  return { x:sx, y:sy, z:zCam, scale };
+}
+
+// =====================================================
+// PATH / MOUNTAIN GEOMETRY
+// =====================================================
+// t in [0,1] -> 3D position on spiral mountain path
+const MOUNTAIN_HEIGHT = 800;    // world units
+const BASE_RADIUS = 260;
+const TOP_RADIUS = 70;
+const PATH_TURNS = 5;           // spiral turns
+const PATH_WIDTH = 32;          // world units
+
+function pathPoint(t){
+  const y = t * MOUNTAIN_HEIGHT;
+  const radius = BASE_RADIUS + (TOP_RADIUS - BASE_RADIUS) * t;
+  const theta = t * PATH_TURNS * Math.PI * 2;
+  const x = Math.cos(theta) * radius;
+  const z = Math.sin(theta) * radius;
+  return vec3(x,y,z);
+}
+
+// Create path segment quad
+function pathSegmentQuad(t0, t1){
+  const p0 = pathPoint(t0);
+  const p1 = pathPoint(t1);
+  const tangent = norm(sub(p1,p0));
+  const up = vec3(0,1,0);
+  const side = norm(cross(up,tangent));
+  const halfW = PATH_WIDTH * 0.5;
+  const offset = mul(side, halfW);
+
+  return [
+    add(p0, offset),  // left0
+    sub(p0, offset),  // right0
+    sub(p1, offset),  // right1
+    add(p1, offset)   // left1
+  ];
+}
+
+// environment color by height
+function envColors(t){
+  if (t < 0.33){
+    return {
+      skyTop:   "#6ac6ff",
+      skyBottom:"#024",
+      fog:      "rgba(150,210,255,0.25)",
+      path:     "#3c7040",
+      side:     "#1d3c20"
+    };
+  } else if (t < 0.66){
+    return {
+      skyTop:   "#4b6fa8",
+      skyBottom:"#020514",
+      fog:      "rgba(150,170,210,0.35)",
+      path:     "#7b6e54",
+      side:     "#3e3326"
+    };
+  } else {
+    return {
+      skyTop:   "#e7f5ff",
+      skyBottom:"#3c5c88",
+      fog:      "rgba(255,255,255,0.5)",
+      path:     "#f7f7fb",
+      side:     "#9aa7c4"
+    };
   }
-  window.addEventListener("resize", resize);
-  resize();
+}
 
-  // -------------------------------------------------------
-  // INPUT: PAN + ZOOM + GIFTS (G KEY)
-  // -------------------------------------------------------
-  let isDragging = false;
-  let lastY = 0;
+// =====================================================
+// CLIMBERS
+// =====================================================
+const climbers = [];
+// 30 minutes (1800s) from bottom (t=0) to top (t=1)
+const BASE_SPEED = 1 / (30 * 60); // progress per second
 
-  canvas.addEventListener("mousedown", (e) => {
-    isDragging = true;
-    lastY = e.clientY;
+function addClimber(){
+  climbers.push({
+    t: 0,                         // progress 0..1
+    speed: BASE_SPEED * (0.9 + Math.random()*0.3), // slight variation
+    sideOffset: (Math.random()*2 - 1) * (PATH_WIDTH*0.25), // offset left/right
+    color: `hsl(${200 + Math.random()*80},80%,60%)`,
+    bobOffset: Math.random()*Math.PI*2
   });
+}
 
-  window.addEventListener("mouseup", () => {
-    isDragging = false;
-  });
+// Start with one solo climber
+addClimber();
 
-  window.addEventListener("mousemove", (e) => {
-    if (!isDragging) return;
-    const dy = e.clientY - lastY;
-    lastY = e.clientY;
-    cameraY += dy / cameraZoom;
-  });
+window.addEventListener("keydown",(e)=>{
+  if (e.key === "g" || e.key === "G"){
+    addClimber();
+  }
+});
 
-  window.addEventListener("wheel", (e) => {
-    const zoomAmount = -e.deltaY * 0.001;
-    const oldZoom = cameraZoom;
-    cameraZoom = Math.min(Math.max(cameraZoom * (1 + zoomAmount), 0.4), 2.5);
+// =====================================================
+// RENDER LOOP
+// =====================================================
+let lastTime = performance.now();
 
-    // Zoom towards mouse Y
-    const mouseY = (e.clientY - height / 2) / oldZoom + cameraY;
-    cameraY = mouseY - (e.clientY - height / 2) / cameraZoom;
-  });
+function drawBackground(avgT){
+  const env = envColors(avgT);
 
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "g" || e.key === "G") {
-      addClimber();
+  // sky gradient
+  const g = ctx.createLinearGradient(0,0,0,height);
+  g.addColorStop(0, env.skyTop);
+  g.addColorStop(1, env.skyBottom);
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,width,height);
+
+  // distant fog / horizon
+  ctx.fillStyle = env.fog;
+  ctx.fillRect(0,height*0.45,width,height*0.55);
+}
+
+function drawPath(mainT){
+  const env = envColors(mainT);
+  const segments = 120;
+  const spanBefore = 0.10;
+  const spanAfter  = 0.60;
+  const tStart = Math.max(0, mainT - spanBefore);
+  const tEnd   = Math.min(1, mainT + spanAfter);
+
+  const dt = (tEnd - tStart) / segments;
+
+  // draw from far to near (back-to-front)
+  for (let i=segments-1; i>=0; i--){
+    const t0 = tStart + dt*i;
+    const t1 = t0 + dt;
+    const quad = pathSegmentQuad(t0,t1);
+
+    const proj = quad.map(p=>project(p));
+    if (proj.some(p=>p===null)) continue;
+
+    const avgZ = proj.reduce((a,p)=>a+p.z,0)/proj.length;
+    let shade = 1 - Math.min(avgZ/450, 0.7);
+    const pathCol = env.path;
+    const sideCol = env.side;
+
+    // simple darken
+    function shadeColor(hex, factor){
+      const c = parseInt(hex.slice(1),16);
+      let r=(c>>16)&255, g=(c>>8)&255, b=c&255;
+      r=Math.floor(r*factor); g=Math.floor(g*factor); b=Math.floor(b*factor);
+      return `rgb(${r},${g},${b})`;
     }
-  });
 
-  // -------------------------------------------------------
-  // BACKGROUND / MOUNTAIN DRAWING
-  // -------------------------------------------------------
-  function drawBackground() {
-    const topColor = "#081632";
-    const bottomColor = "#020308";
-
-    const grad = ctx.createLinearGradient(0, 0, 0, height);
-    grad.addColorStop(0, topColor);
-    grad.addColorStop(1, bottomColor);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, width, height);
-
-    // stars
-    ctx.save();
-    ctx.globalAlpha = 0.4;
-    ctx.fillStyle = "#ffffff";
-    for (let i = 0; i < 120; i++) {
-      const x = (i * 73) % width;
-      const y = ((i * 211) % 200) + 10;
-      ctx.fillRect(x, y, 1.2, 1.2);
-    }
-    ctx.restore();
-  }
-
-  function worldToScreen(x, y) {
-    // world (0,0) is at center bottom-ish of screen
-    const screenX = width / 2 + x * cameraZoom;
-    const screenY = height - (y - cameraY) * cameraZoom;
-    return { x: screenX, y: screenY };
-  }
-
-  function drawMountain() {
-    ctx.save();
     ctx.beginPath();
-
-    const baseY = -80;
-    const peakY = 600;
-
-    const leftBase = worldToScreen(-500, baseY);
-    const rightBase = worldToScreen(500, baseY);
-    const peak = worldToScreen(0, peakY);
-
-    ctx.moveTo(leftBase.x, leftBase.y);
-    // curved sides
-    const steps = 40;
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const sideX = -400 + t * 800;
-      const sideY =
-        baseY +
-        (peakY - baseY) * (1 - Math.pow(Math.abs((t - 0.5) * 2), 1.4));
-      const p = worldToScreen(sideX, sideY);
-      ctx.lineTo(p.x, p.y);
-    }
+    ctx.moveTo(proj[0].x, proj[0].y);
+    for(let j=1;j<4;j++) ctx.lineTo(proj[j].x, proj[j].y);
     ctx.closePath();
-
-    const grad = ctx.createLinearGradient(0, height, 0, 0);
-    grad.addColorStop(0, "#1b2836");
-    grad.addColorStop(0.35, "#354351");
-    grad.addColorStop(0.9, "#8c9daf");
-    ctx.fillStyle = grad;
+    ctx.fillStyle = shadeColor(pathCol, 0.5+shade*0.5);
     ctx.fill();
 
-    // Snow cap
+    // side shading line
     ctx.beginPath();
-    const snowStartY = peakY - 80;
-    const snowBaseLeft = worldToScreen(-130, snowStartY);
-    const snowBaseRight = worldToScreen(130, snowStartY);
-    ctx.moveTo(snowBaseLeft.x, snowBaseLeft.y);
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const sx = -110 + t * 220;
-      const sy =
-        snowStartY +
-        (peakY - snowStartY) * (1 - Math.pow(Math.abs((t - 0.5) * 2), 1.1));
-      const p = worldToScreen(sx, sy);
-      ctx.lineTo(p.x, p.y);
-    }
-    ctx.closePath();
-    const snowGrad = ctx.createLinearGradient(0, height, 0, 0);
-    snowGrad.addColorStop(0, "#edf4ff");
-    snowGrad.addColorStop(1, "#ffffff");
-    ctx.fillStyle = snowGrad;
-    ctx.fill();
-
-    // glowing sun
-    const sunPos = worldToScreen(-260, 760);
-    const sunRadius = 60 * cameraZoom;
-    const sunGrad = ctx.createRadialGradient(
-      sunPos.x,
-      sunPos.y,
-      0,
-      sunPos.x,
-      sunPos.y,
-      sunRadius
-    );
-    sunGrad.addColorStop(0, "rgba(255,246,210,1)");
-    sunGrad.addColorStop(1, "rgba(255,246,210,0)");
-    ctx.fillStyle = sunGrad;
-    ctx.fillRect(
-      sunPos.x - sunRadius,
-      sunPos.y - sunRadius,
-      sunRadius * 2,
-      sunRadius * 2
-    );
-    ctx.restore();
-  }
-
-  function drawPath() {
-    ctx.save();
-    ctx.lineWidth = 6 * cameraZoom;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-
-    ctx.beginPath();
-    let started = false;
-    for (let i = 0; i <= 260; i++) {
-      const t = i / 260;
-      const y = 0 + t * 800;
-      const amp = 120;
-      const x =
-        Math.sin(t * 5) * amp +
-        Math.sin((t * 11 + 1) * 0.8) * (amp * 0.3) +
-        Math.sin((t * 19 + 3) * 0.6) * (amp * 0.15);
-      const p = worldToScreen(x, y);
-      if (!started) {
-        ctx.moveTo(p.x, p.y);
-        started = true;
-      } else {
-        ctx.lineTo(p.x, p.y);
-      }
-    }
+    ctx.moveTo(proj[1].x, proj[1].y);
+    ctx.lineTo(proj[2].x, proj[2].y);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = shadeColor(sideCol, 0.4+shade*0.5);
     ctx.stroke();
-
-    ctx.restore();
   }
+}
 
-  // -------------------------------------------------------
-  // CLIMBERS
-  // -------------------------------------------------------
-  const climbers = [];
+function drawClimber(one, time){
+  const basePoint = pathPoint(one.t);
+  const ahead = pathPoint(Math.min(1, one.t + 0.01));
+  const tangent = norm(sub(ahead, basePoint));
+  const up = vec3(0,1,0);
+  const side = norm(cross(up,tangent));
 
-  function pathXAtHeight(y) {
-    const t = y / 800;
-    const amp = 120;
-    return (
-      Math.sin(t * 5) * amp +
-      Math.sin((t * 11 + 1) * 0.8) * (amp * 0.3) +
-      Math.sin((t * 19 + 3) * 0.6) * (amp * 0.15)
-    );
-  }
+  const position = add(basePoint, mul(side, one.sideOffset));
 
-  function addClimber() {
-    const startHeight = Math.random() * 80;
-    climbers.push({
-      y: startHeight,
-      speed: 18 + Math.random() * 18,
-      bobOffset: Math.random() * Math.PI * 2,
-      color: `hsl(${200 + Math.random() * 80}, 80%, 60%)`,
-    });
-  }
+  // simple body proportions
+  const p = project(position);
+  if (!p) return;
 
-  // Start with 1 climber
-  addClimber();
+  // scale with distance
+  const baseHeight = 70; // pixels at reference distance
+  const size = baseHeight * (1 / (p.z*0.04));
+  const headR = size * 0.18;
+  const bodyH = size * 0.45;
+  const bodyW = size * 0.22;
+  const legL  = size * 0.35;
+  const armL  = size * 0.32;
 
-  function drawClimber(c, time) {
-    const px = pathXAtHeight(c.y);
-    const bob = Math.sin(time * 5 + c.bobOffset) * 2.6;
-    const worldY = c.y + bob;
-    const p = worldToScreen(px, worldY);
+  const bob = Math.sin(time*4 + one.bobOffset)* (size*0.035);
 
-    const scale = 1.6 * cameraZoom;
-    const bodyHeight = 28 * scale;
-    const bodyWidth = 10 * scale;
-    const legLength = 16 * scale;
-    const armLength = 14 * scale;
-    const headRadius = 6 * scale;
+  const cx = p.x;
+  const cy = p.y - size*0.3 + bob;
 
-    ctx.save();
+  ctx.save();
 
-    // shadow
-    const shadow = worldToScreen(px, c.y - 2);
-    ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+  // shadow
+  const groundPos = project(vec3(position.x,0,position.z));
+  if (groundPos){
     ctx.beginPath();
-    ctx.ellipse(
-      shadow.x,
-      shadow.y + 6 * scale,
-      8 * scale,
-      3 * scale,
-      0,
-      0,
-      Math.PI * 2
-    );
-    ctx.fill();
-
-    // body
-    ctx.fillStyle = c.color;
-    ctx.fillRect(
-      p.x - bodyWidth / 2,
-      p.y - bodyHeight - headRadius * 1.4,
-      bodyWidth,
-      bodyHeight
-    );
-
-    // head
-    ctx.beginPath();
-    ctx.arc(
-      p.x,
-      p.y - bodyHeight - headRadius * 2.1,
-      headRadius,
-      0,
-      Math.PI * 2
-    );
-    ctx.fillStyle = "#ffd7b0";
-    ctx.fill();
-
-    // backpack
+    ctx.ellipse(groundPos.x, groundPos.y, size*0.25, size*0.12, 0, 0, Math.PI*2);
     ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(
-      p.x - bodyWidth / 2 - 3 * scale,
-      p.y - bodyHeight - headRadius * 1.4 + 4 * scale,
-      6 * scale,
-      bodyHeight * 0.7
-    );
-
-    // walking animation
-    const walk = Math.sin(time * 9 + c.bobOffset) * 0.9;
-
-    // legs
-    ctx.strokeStyle = "#222";
-    ctx.lineWidth = 2.2 * scale;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y - headRadius * 1.2);
-    ctx.lineTo(
-      p.x - 4 * scale + walk * 2 * scale,
-      p.y - headRadius * 1.2 + legLength
-    );
-    ctx.moveTo(p.x, p.y - headRadius * 1.2);
-    ctx.lineTo(
-      p.x + 4 * scale - walk * 2 * scale,
-      p.y - headRadius * 1.2 + legLength
-    );
-    ctx.stroke();
-
-    // arms (reversed phase)
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y - bodyHeight - headRadius * 0.7);
-    ctx.lineTo(
-      p.x - 10 * scale - walk * 3 * scale,
-      p.y - bodyHeight - headRadius * 0.7 + armLength
-    );
-    ctx.moveTo(p.x, p.y - bodyHeight - headRadius * 0.7);
-    ctx.lineTo(
-      p.x + 10 * scale + walk * 3 * scale,
-      p.y - bodyHeight - headRadius * 0.7 + armLength
-    );
-    ctx.stroke();
-
-    ctx.restore();
+    ctx.fill();
   }
 
-  // -------------------------------------------------------
-  // MAIN LOOP
-  // -------------------------------------------------------
-  let lastTime = performance.now();
+  // legs
+  ctx.strokeStyle = "#222";
+  ctx.lineWidth = size*0.055;
+  ctx.lineCap = "round";
+  const walk = Math.sin(time*6 + one.bobOffset);
 
-  function loop(now) {
-    const dt = (now - lastTime) / 1000;
-    lastTime = now;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + bodyH*0.4);
+  ctx.lineTo(cx - size*0.12 + walk*size*0.12,
+             cy + bodyH*0.4 + legL);
+  ctx.moveTo(cx, cy + bodyH*0.4);
+  ctx.lineTo(cx + size*0.12 - walk*size*0.12,
+             cy + bodyH*0.4 + legL);
+  ctx.stroke();
 
-    // update climbers
-    const t = now / 1000;
-    for (const c of climbers) {
-      c.y += c.speed * dt;
-      if (c.y > 780) {
-        c.y = 780; // stop near summit
-        c.speed = 0;
-      }
-    }
+  // body
+  ctx.fillStyle = one.color;
+  ctx.fillRect(
+    cx - bodyW*0.5,
+    cy - bodyH*0.5,
+    bodyW,
+    bodyH
+  );
 
-    drawBackground();
-    drawMountain();
-    drawPath();
+  // backpack
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(
+    cx - bodyW*0.5 - size*0.07,
+    cy - bodyH*0.3,
+    size*0.14,
+    bodyH*0.7
+  );
 
-    for (const c of climbers) {
-      drawClimber(c, t);
-    }
+  // arms
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - bodyH*0.2);
+  ctx.lineTo(
+    cx - size*0.18 - walk*size*0.18,
+    cy - bodyH*0.2 + armL
+  );
+  ctx.moveTo(cx, cy - bodyH*0.2);
+  ctx.lineTo(
+    cx + size*0.18 + walk*size*0.18,
+    cy - bodyH*0.2 + armL
+  );
+  ctx.stroke();
 
-    requestAnimationFrame(loop);
+  // head
+  ctx.beginPath();
+  ctx.arc(cx, cy - bodyH*0.65, headR, 0, Math.PI*2);
+  ctx.fillStyle = "#ffd7b0";
+  ctx.fill();
+
+  // simple face highlight
+  ctx.beginPath();
+  ctx.arc(cx+headR*0.25, cy - bodyH*0.65 - headR*0.1, headR*0.3, 0, Math.PI*2);
+  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function updateCamera(mainClimber){
+  const t = mainClimber.t;
+  const center = pathPoint(t);
+  const ahead = pathPoint(Math.min(1, t + 0.02));
+  const tangent = norm(sub(ahead, center));
+  const up = vec3(0,1,0);
+  const side = norm(cross(tangent, up));
+
+  const backDist = 180;
+  const upDist = 70;
+
+  cameraTarget = center;
+  cameraPos = add(
+    add(center, mul(tangent, -backDist)),
+    mul(up, upDist)
+  );
+
+  // small side offset for cinematic angle
+  cameraPos = add(cameraPos, mul(side, 40));
+}
+
+// main loop
+function loop(now){
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+  const time = now / 1000;
+
+  // update climbers
+  for (const c of climbers){
+    c.t += c.speed * dt;
+    if (c.t > 1) c.t = 1; // reached summit
   }
+
+  const mainClimber = climbers[0];
+  updateCamera(mainClimber);
+
+  // average height for environment
+  const avgT = Math.min(1, mainClimber.t + 0.1);
+
+  drawBackground(avgT);
+  drawPath(mainClimber.t);
+
+  // draw climbers back-to-front
+  const sorted = [...climbers].sort((a,b)=>{
+    const pa = project(pathPoint(a.t));
+    const pb = project(pathPoint(b.t));
+    return (pb?.z||0) - (pa?.z||0);
+  });
+  for (const c of sorted){
+    drawClimber(c, time);
+  }
+
+  // overlay: show progress %
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(15, height-40, 180, 26);
+  ctx.fillStyle = "#fff";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  const pct = Math.round(mainClimber.t * 100);
+  ctx.fillText(`Main climber: ${pct}% to summit`, 24, height-27);
 
   requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>
